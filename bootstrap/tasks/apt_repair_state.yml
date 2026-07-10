@@ -1,0 +1,21 @@
+---
+- name: Configure unpacked packages
+  ansible.builtin.shell:
+    cmd: dpkg --configure -a
+  ignore_errors: true
+
+- name: Fix broken dependencies
+  ansible.builtin.shell:
+    cmd: apt --fix-broken install -y
+  ignore_errors: true
+
+- name: Attempt to reconfigure packages
+  ansible.builtin.shell:
+    cmd: apt install -f -y
+  ignore_errors: true
+
+- name: Final recovery attempt - update cache and fix again
+  ansible.builtin.apt:
+    update_cache: true
+    force_apt_get: true
+  ignore_errors: true

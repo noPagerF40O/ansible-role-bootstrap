@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: "noPagerF40O"
+  description: "Базовая настройка VPS (безопасность, пакеты, локаль, таймзона, ssh, ufw, fail2ban ...)"
+  license: "MIT"
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Debian
+
+dependencies:
+  - name: geerlingguy.ntp
+    src: https://github.com/geerlingguy/ansible-role-ntp.git
+    scm: git
+    version: master

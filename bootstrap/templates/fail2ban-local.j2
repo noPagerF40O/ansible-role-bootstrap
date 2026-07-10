@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[DEFAULT]
+bantime = {{ bootstrap_fail2ban_bantime }}
+findtime = {{ bootstrap_fail2ban_findtime }}
+maxretry = {{ bootstrap_fail2ban_maxretry }}
+ignoreip = {{ bootstrap_fail2ban_ignoreip }}
+
+[sshd]
+enabled = true
+port = ssh
+logpath = %(sshd_log)s

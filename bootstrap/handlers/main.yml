@@ -1,0 +1,23 @@
+---
+- name: restart ssh
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+
+- name: restart fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+  when: bootstrap_fail2ban_enabled
+
+- name: reload ufw
+  ansible.builtin.command: ufw reload
+  when: bootstrap_ufw_enabled
+
+- name: apply sysctl
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/99-bootstrap.conf
+
+- name: restart unattended-upgrades
+  ansible.builtin.service:
+    name: unattended-upgrades
+    state: restarted

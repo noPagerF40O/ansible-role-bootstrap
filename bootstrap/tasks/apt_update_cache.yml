@@ -1,0 +1,12 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ bootstrap_apt_cache_valid_time }}"
+  register: apt_cache_result
+  ignore_errors: true
+
+- name: Fail if apt cache update failed
+  ansible.builtin.fail:
+    msg: "Apt cache update failed. Please check repositories."
+  when: apt_cache_result is failed

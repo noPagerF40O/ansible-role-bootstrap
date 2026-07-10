@@ -1,0 +1,70 @@
+---
+# ========== Настройки обновления системы ==========
+bootstrap_apt_recovery_on_error: true
+bootstrap_apt_cache_valid_time: 3600
+bootstrap_apt_upgrade_type: 'dist'
+bootstrap_apt_autoremove: true
+bootstrap_apt_timeout: 1800
+
+# ========== Список базовых пакетов ===========
+bootstrap_packages:
+  - htop
+  - curl
+  - wget
+  - vim
+  - tree
+  - net-tools
+  - unzip
+  - git
+  - fail2ban
+  - ufw
+  - logrotate
+  - auditd
+  - unattended-upgrades
+
+# ========== Локаль и время ==========
+bootstrap_locale: "ru_RU.UTF-8"
+bootstrap_ntp_enabled: true
+bootstrap_timezone: "Asia/Novosibirsk"
+bootstrap_ntp_servers:
+  - "0.ru.pool.ntp.org iburst"
+  - "1.ru.pool.ntp.org iburst"
+  - "2.ru.pool.ntp.org iburst"
+  - "3.ru.pool.ntp.org iburst"
+
+# ========== Настройки SSH ==========
+bootstrap_ssh_permit_root_login: false
+bootstrap_ssh_password_authentication: false
+bootstrap_ssh_pubkey_authentication: true
+bootstrap_ssh_port: 22
+bootstrap_ssh_print_motd: false
+bootstrap_ssh_max_auth_tries: 3
+bootstrap_ssh_client_alive_interval: 300
+
+# UFW (Uncomplicated Firewall)
+bootstrap_ufw_enabled: true
+bootstrap_ufw_default_deny_incoming: true
+bootstrap_ufw_default_allow_outgoing: true
+bootstrap_ufw_allowed_ports:
+  - { port: "{{ bootstrap_ssh_port }}", proto: "tcp" }
+
+# fail2ban
+bootstrap_fail2ban_enabled: true
+bootstrap_fail2ban_ignoreip: "127.0.0.1/8 ::1"
+bootstrap_fail2ban_bantime: 3600
+bootstrap_fail2ban_maxretry: 5
+bootstrap_fail2ban_findtime: 600
+
+# Настройка ядра
+bootstrap_sysctl_config:
+  - { name: "net.ipv4.tcp_syncookies", value: 1 }
+  - { name: "net.ipv4.ip_forward", value: 0 }
+  - { name: "net.ipv4.conf.all.rp_filter", value: 1 }
+  - { name: "net.ipv4.conf.default.rp_filter", value: 1 }
+  - { name: "net.ipv4.conf.all.accept_source_route", value: 0 }
+  - { name: "net.ipv6.conf.all.accept_source_route", value: 0 }
+  - { name: "kernel.sysrq", value: 0 }
+
+# Автоматические обновления безопасности
+bootstrap_unattended_upgrades_enabled: true
+bootstrap_unattended_upgrades_mail: ""

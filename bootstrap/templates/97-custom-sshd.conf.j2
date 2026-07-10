@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+Port {{ bootstrap_ssh_port }}
+PermitRootLogin {{ 'yes' if bootstrap_ssh_permit_root_login else 'no' }}
+PasswordAuthentication {{ 'yes' if bootstrap_ssh_password_authentication else 'no' }}
+PubkeyAuthentication {{ 'yes' if bootstrap_ssh_pubkey_authentication else 'no' }}
+MaxAuthTries {{ bootstrap_ssh_max_auth_tries }}
+ClientAliveInterval {{ bootstrap_ssh_client_alive_interval }}
+PrintMotd {{ 'yes' if bootstrap_ssh_print_motd else 'no' }}
+X11Forwarding no
+AllowTcpForwarding no
+PermitEmptyPasswords no
+{% if bootstrap_ssh_allow_users is defined and bootstrap_ssh_allow_users %}
+AllowUsers {{ bootstrap_ssh_allow_users | join(' ') }}
+{% endif %}

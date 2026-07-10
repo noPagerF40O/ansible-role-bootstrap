@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+{% for item in bootstrap_sysctl_config %}
+{{ item.name }} = {{ item.value }}
+{% endfor %}

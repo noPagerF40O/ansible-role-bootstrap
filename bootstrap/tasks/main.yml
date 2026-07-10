@@ -1,0 +1,454 @@
+---
+# ========== 1. Обновляем систему ==========
+- name: System update and upgrade
+  block:
+    - name: Update apt cache
+      import_tasks: apt_update_cache.yml
+
+    - name: Perform dist-upgrade
+      ansible.builtin.apt:
+        upgrade: "{{ bootstrap_apt_upgrade_type }}"
+        autoremove: "{{ bootstrap_apt_autoremove }}"
+        force_apt_get: true
+      register: upgrade_result
+      timeout: "{{ bootstrap_apt_timeout }}"
+
+  rescue:
+    - name: Repair APT state on upgrade failure
+      block:
+        - name: Repair APT state
+          import_tasks: apt_repair_state.yml
+      when: bootstrap_apt_recovery_on_error
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          System upgrade failed.
+          {% if bootstrap_apt_recovery_on_error %}
+          Automatic recovery was attempted but did not resolve the issue.
+          {% else %}
+          Automatic recovery is disabled.
+          {% endif %}
+          Manual intervention required. Check logs: /var/log/apt/history.log, /var/log/dpkg.log
+
+  always:
+    - name: Clean up apt cache
+      ansible.builtin.apt:
+        autoclean: true
+      ignore_errors: true
+
+  when: ansible_os_family == 'Debian'
+  tags: [bootstrap, bootstrap-update]
+
+
+# ========== 2. Устаналиваем базовые пакеты ==========
+- name: Install base packages
+  block:
+    - name: Update apt cache
+      import_tasks: apt_update_cache.yml
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name: "{{ bootstrap_packages }}"
+        state: present
+        force_apt_get: true
+      register: install_result
+      timeout: "{{ bootstrap_apt_timeout }}"
+
+  rescue:
+    - name: Repair APT state on installation failure
+      block:
+        - name: Repair APT state
+          import_tasks: apt_repair_state.yml
+      when: bootstrap_apt_recovery_on_error
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          Package installation failed.
+          {% if bootstrap_apt_recovery_on_error %}
+          Automatic recovery was attempted but did not resolve the issue.
+          {% else %}
+          Automatic recovery is disabled.
+          {% endif %}
+          Manual intervention required. Check logs: /var/log/apt/history.log, /var/log/dpkg.log
+
+  always:
+    - name: Clean up apt cache
+      ansible.builtin.apt:
+        autoclean: true
+      ignore_errors: true
+
+  when: ansible_os_family == 'Debian'
+  tags: [bootstrap, bootstrap-packages]
+
+
+# ========== 3. Настраиваем локаль ==========
+- name: Configure system locale
+  block:
+    - name: Generate locale
+      ansible.builtin.locale_gen:
+        name: "{{ bootstrap_locale }}"
+        state: present
+
+    - name: Set default locale
+      ansible.builtin.lineinfile:
+        path: /etc/default/locale
+        regexp: '^LANG='
+        line: 'LANG={{ bootstrap_locale }}'
+        create: yes
+        mode: '0644'
+      when: bootstrap_locale is defined
+
+    - name: Apply locale settings (for current session)
+      ansible.builtin.shell:
+        cmd: update-locale LANG={{ bootstrap_locale }}
+      changed_when: false
+
+  when: ansible_os_family == 'Debian'
+  tags: [bootstrap, bootstrap-locale]
+
+
+# ========== 4. Устаналиваем таймзону и настройки NTP ==========
+- name: Configure time synchronization and timezone
+  block:
+    - name: Set system timezone
+      ansible.builtin.timezone:
+        name: "{{ bootstrap_timezone }}"
+      when: bootstrap_timezone is defined
+
+    - name: Include geerlingguy.ntp role
+      ansible.builtin.include_role:
+        name: geerlingguy.ntp
+      vars:
+        ntp_timezone: "{{ bootstrap_timezone }}"
+        ntp_servers: "{{ bootstrap_ntp_servers }}"
+      when: bootstrap_ntp_enabled
+
+  when: ansible_os_family == 'Debian'
+  tags: [bootstrap, bootstrap-time]
+
+
+# ========== 5. Настраиваем SSH ==========
+- name: Configure SSH
+  block:
+    - name: Deploy SSH config template
+      ansible.builtin.template:
+        src: 97-custom-sshd.conf.j2
+        dest: /etc/ssh/sshd_config.d/97-custom.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: ssh_config_changes
+      notify: restart ssh
+
+    - name: Validate SSH config
+      ansible.builtin.command: sshd -t
+      register: ssh_validate
+      changed_when: false
+      check_mode: no
+
+    - name: Backup current config
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config.d/97-custom.conf
+        dest: /etc/ssh/sshd_config.d/97-custom.conf.backup
+        remote_src: yes
+      ignore_errors: yes
+
+    - name: Restart SSH if config changed
+      ansible.builtin.meta: flush_handlers
+      when:
+        - ssh_config_changes is changed
+        - ssh_validate.rc == 0
+
+  rescue:
+    - name: Check if backup exists
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config.d/97-custom.conf.backup
+      register: backup_stat
+
+    - name: Restore backup
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config.d/97-custom.conf.backup
+        dest: /etc/ssh/sshd_config.d/97-custom.conf
+        remote_src: yes
+      when: backup_stat.stat.exists
+
+    - name: Restart SSH with default config
+      ansible.builtin.service:
+        name: "{{ bootstrap_ssh_service_name }}"
+        state: restarted
+      when: backup_stat.stat.exists
+
+    - name: Fail with error
+      ansible.builtin.fail:
+        msg: "SSH configuration failed. Backup restored (if existed)."
+
+  when: ansible_os_family == 'Debian'
+  tags: [bootstrap, bootstrap-ssh]
+
+
+# ========== 6. Настраиваем UFW ==========
+- name: Configure UFW firewall
+  block:
+    - name: Ensure UFW is installed
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: true
+      register: ufw_install
+
+    - name: Set default policies
+      community.general.ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "{{ 'deny' if bootstrap_ufw_default_deny_incoming else 'allow' }}" }
+        - { direction: "outgoing", policy: "{{ 'allow' if bootstrap_ufw_default_allow_outgoing else 'deny' }}" }
+
+    - name: Allow specific ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+      loop: "{{ bootstrap_ufw_allowed_ports }}"
+      when: bootstrap_ufw_allowed_ports | length > 0
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+      register: ufw_enable_result
+
+  rescue:
+    - name: Disable UFW if enable failed
+      community.general.ufw:
+        state: disabled
+      when: ufw_enable_result is defined and ufw_enable_result is failed
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          UFW configuration failed.
+          {% if ufw_enable_result is defined and ufw_enable_result is failed %}
+          UFW has been disabled to restore access.
+          {% else %}
+          Manual intervention required.
+          {% endif %}
+          Check logs and ensure allowed ports include SSH.
+
+  always:
+    - name: Clean up apt cache (if installed)
+      ansible.builtin.apt:
+        autoclean: true
+      ignore_errors: true
+
+  when:
+    - ansible_os_family == 'Debian'
+    - bootstrap_ufw_enabled | bool
+  tags: [bootstrap, bootstrap-ufw]
+
+
+# ========== 7. Настраиваем fail2ban ==========
+- name: Configure fail2ban
+  block:
+    - name: Ensure fail2ban is installed
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+        update_cache: true
+
+    - name: Check if SSH log file exists
+      ansible.builtin.stat:
+        path: /var/log/auth.log
+      register: auth_log_stat
+
+    - name: Create SSH log file if missing
+      ansible.builtin.file:
+        path: /var/log/auth.log
+        state: touch
+        owner: root
+        group: adm
+        mode: '0640'
+      when: not auth_log_stat.stat.exists
+
+    - name: Create fail2ban local config
+      ansible.builtin.template:
+        src: fail2ban-local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+      register: fail2ban_config_change
+      notify: restart fail2ban
+
+    - name: Validate fail2ban config
+      ansible.builtin.command: fail2ban-client -t
+      register: fail2ban_validate
+      changed_when: false
+      check_mode: no
+
+    - name: Restart fail2ban if config changed and valid
+      ansible.builtin.meta: flush_handlers
+      when:
+        - fail2ban_config_change is changed
+        - fail2ban_validate.rc == 0
+
+  rescue:
+    - name: Disable fail2ban if config is invalid
+      ansible.builtin.service:
+        name: fail2ban
+        state: stopped
+        enabled: false
+      when: fail2ban_validate is defined and fail2ban_validate.rc != 0
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          Fail2ban configuration failed.
+          {% if fail2ban_validate is defined and fail2ban_validate.rc != 0 %}
+          Configuration is invalid. Fail2ban has been stopped and disabled.
+          {% else %}
+          Manual intervention required.
+          {% endif %}
+          Check logs: /var/log/fail2ban.log
+
+  always:
+    - name: Clean up apt cache
+      ansible.builtin.apt:
+        autoclean: true
+      ignore_errors: true
+
+  when:
+    - ansible_os_family == 'Debian'
+    - bootstrap_fail2ban_enabled | default(true) | bool
+  tags: [bootstrap, bootstrap-fail2ban]
+
+
+# ========== 8. Выставляем опции безопастности ядра ==========
+- name: Configure sysctl hardening
+  block:
+    - name: Deploy sysctl configuration
+      ansible.builtin.template:
+        src: 95-bootstrap-sysctl.conf.j2
+        dest: /etc/sysctl.d/95-bootstrap.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: sysctl_config_change
+      notify: apply sysctl
+
+    - name: Validate sysctl configuration
+      ansible.builtin.command: sysctl -p /etc/sysctl.d/95-bootstrap.conf
+      register: sysctl_validate
+      changed_when: false
+      check_mode: no
+      ignore_errors: true
+
+    - name: Force apply sysctl if config changed and valid
+      ansible.builtin.meta: flush_handlers
+      when:
+        - sysctl_config_change is changed
+        - sysctl_validate.rc == 0
+
+  rescue:
+    - name: Remove invalid sysctl config
+      ansible.builtin.file:
+        path: /etc/sysctl.d/95-bootstrap.conf
+        state: absent
+      when: sysctl_validate is defined and sysctl_validate.rc != 0
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          Sysctl configuration failed.
+          {% if sysctl_validate is defined and sysctl_validate.rc != 0 %}
+          Invalid configuration detected. The file has been removed to prevent boot issues.
+          Check the template syntax and parameter values.
+          {% else %}
+          Manual intervention required.
+          {% endif %}
+
+  when:
+    - bootstrap_sysctl_config | length > 0
+  tags: [bootstrap, bootstrap-sysctl]
+
+
+# ========== 9. Настройки автоматического обновления пакетов безопастности ==========
+- name: Configure unattended-upgrades
+  block:
+    - name: Ensure unattended-upgrades is installed
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: present
+        update_cache: true
+        force_apt_get: true
+      register: pkg_install
+      timeout: "{{ bootstrap_apt_timeout | default(1800) }}"
+
+    - name: Deploy main configuration with backup
+      ansible.builtin.template:
+        src: 50unattended-upgrades.j2
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      register: main_config_change
+      notify: restart unattended-upgrades
+
+    - name: Deploy auto-upgrades configuration with backup
+      ansible.builtin.template:
+        src: 20auto-upgrades.j2
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      register: auto_config_change
+
+    - name: Restart service if any config changed
+      ansible.builtin.meta: flush_handlers
+      when: main_config_change is changed or auto_config_change is changed
+
+    - name: Ensure unattended-upgrades is running and enabled
+      ansible.builtin.service:
+        name: unattended-upgrades
+        state: started
+        enabled: yes
+
+  rescue:
+    - name: Attempt to restore previous configurations from backup
+      ansible.builtin.copy:
+        src: "{{ item }}.bak"
+        dest: "{{ item }}"
+        remote_src: yes
+      loop:
+        - /etc/apt/apt.conf.d/50unattended-upgrades
+        - /etc/apt/apt.conf.d/20auto-upgrades
+      ignore_errors: yes
+
+    - name: Restart service after restoration
+      ansible.builtin.service:
+        name: unattended-upgrades
+        state: restarted
+      when: not ansible_check_mode
+
+    - name: Fail with error message
+      ansible.builtin.fail:
+        msg: |
+          Unattended-upgrades configuration failed.
+          {% if main_config_change is defined or auto_config_change is defined %}
+          Configuration files may have been restored from backup if available.
+          {% endif %}
+          Manual intervention required. Check logs: /var/log/unattended-upgrades/
+
+  always:
+    - name: Clean up apt cache
+      ansible.builtin.apt:
+        autoclean: true
+      ignore_errors: true
+
+  when:
+    - ansible_os_family == 'Debian'
+    - bootstrap_unattended_upgrades_enabled | default(true) | bool
+  tags: [bootstrap, bootstrap-auto-upgrades]
