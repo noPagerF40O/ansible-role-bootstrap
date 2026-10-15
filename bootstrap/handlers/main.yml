@@ -15,7 +15,7 @@
   when: bootstrap_ufw_enabled
 
 - name: apply sysctl
-  ansible.builtin.command: sysctl -p /etc/sysctl.d/99-bootstrap.conf
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/95-bootstrap.conf
 
 - name: restart unattended-upgrades
   ansible.builtin.service:
