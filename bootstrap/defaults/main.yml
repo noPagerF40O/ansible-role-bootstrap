@@ -49,7 +49,7 @@ bootstrap_ufw_allowed_ports:
   - { port: "{{ bootstrap_ssh_port }}", proto: "tcp" }
 
 # fail2ban
-bootstrap_fail2ban_enabled: true
+bootstrap_fail2ban_enabled: false
 bootstrap_fail2ban_ignoreip: "127.0.0.1/8 ::1"
 bootstrap_fail2ban_bantime: 3600
 bootstrap_fail2ban_maxretry: 5
